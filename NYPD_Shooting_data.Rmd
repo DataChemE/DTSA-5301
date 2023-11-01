@@ -1,0 +1,244 @@
+---
+title: "NYPD Shooting Incident Data Analysis"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## NYPD Shooting Incident Data (2006-2022) 
+
+This report contains data from recorded shooting incidents in New York City. The data comprises of recorded shooting incidents from 2006 to the previous calendar year (2022). The data is extracted quarterly and reviewed by the Office of Management Analysis and Planning before it is posted.
+
+The purpose of this report is to find trends within the data that can provide helpful feedback to the public and local law enforcement. 
+
+### Datasource link
+<https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD>.
+
+- **Non-Base Packages and Versions Used for Analysis:**
+   - `forecast`: 8.21.1
+   - `RColorBrewer`: 1.1-3
+   - `knitr`: 1.44
+   - `lubridate`: 1.9.3
+   - `forcats`: 1.0.0
+   - `stringr`: 1.5.0
+   - `dplyr`: 1.1.3
+   - `purrr`: 1.0.2
+   - `readr`: 2.1.4
+   - `tidyr`: 1.3.0
+   - `tibble`: 3.2.1
+   - `ggplot2`: 3.4.4
+   - `tidyverse`: 2.0.0
+
+# Loading and Reading data into CSV format 
+```{r import_data, message = FALSE}
+
+#Load all packages needed for this report
+library(tidyverse)
+library(dplyr)
+library(lubridate)
+library(knitr)
+library(ggplot2)
+library(RColorBrewer)
+library(forecast)
+
+data_link <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+
+#Read data into CSV
+shooting_incidents <- read_csv(data_link)
+
+#Display first rows of the original data-set 
+head(shooting_incidents)
+```
+
+
+
+# Data Cleaning and Summary
+
+In this part of the report, we clean up and organize our data. We remove some information that we do not need for our study, like the exact locations of the shootings. We then take a closer look at the information about the people involved in these incidents. We check if any details are missing or if there are any unusual patterns.
+
+We also look at where these incidents are happening, focusing on the different boroughs in the city. This helps us see which areas have more incidents and allows us to understand the situation better.
+```{r cleaning_data, message = FALSE}
+
+# Converting data types
+shooting_incidents$OCCUR_DATE <- as.Date(shooting_incidents$OCCUR_DATE, format = "%m/%d/%Y")
+
+# Converting times to a time object
+shooting_incidents$OCCUR_TIME <- hms(shooting_incidents$OCCUR_TIME)
+
+# Dropping unnecessary columns 
+shooting_incidents <- shooting_incidents %>%
+  select(-c(INCIDENT_KEY, LOC_OF_OCCUR_DESC, LOCATION_DESC, LOC_CLASSFCTN_DESC, X_COORD_CD, Y_COORD_CD, Latitude, Longitude, Lon_Lat))
+
+# Summarizing and displaying selected columns 
+selected_columns_summary <- data.frame(
+  Categories = c("Total Records", "Missing PERP_SEX", "Missing PERP_AGE_GROUP", "Missing PERP_RACE", "Missing VIC_AGE_GROUP", "Missing VIC_SEX", "Missing VIC_RACE"),
+  Counts = c(
+    nrow(shooting_incidents),
+    sum(is.na(shooting_incidents$PERP_SEX)),
+    sum(is.na(shooting_incidents$PERP_AGE_GROUP)),
+    sum(is.na(shooting_incidents$PERP_RACE)),
+    sum(is.na(shooting_incidents$VIC_AGE_GROUP)),
+    sum(is.na(shooting_incidents$VIC_SEX)),
+    sum(is.na(shooting_incidents$VIC_RACE))
+  )
+)
+
+# Printing the summary as a table
+knitr::kable(selected_columns_summary, 
+             caption = "Summary of Selected Columns")
+```
+**Note:** The table illustrates the completeness of the dataset, specifically focusing on information regarding the perpetrators and victims involved in the incidents. A considerable portion of perpetrator information, including sex, age group, and race, is missing—each having over 9,300 missing records. This contrasts sharply with the victim information, which is entirely complete. The absence of perpetrator information poses challenges in conducting a comprehensive and unbiased analysis, necessitating cautious handling of the data to maintain the robustness and integrity of the analytical outcomes.
+
+
+```{r grouping_boroughs, message = FALSE}
+# Creating the borough_distribution object by tabulating incidents across boroughs
+borough_distribution <- table(shooting_incidents$BORO)
+
+# Converting the table to a data frame for better display and adding appropriate column names
+borough_distribution_table <- as.data.frame(borough_distribution)
+colnames(borough_distribution_table) <- c("BORO", "Number_of_Incidents")
+
+# Displaying the distribution of incidents across boroughs as a table
+borough_distribution_table <- as.data.frame(borough_distribution)
+colnames(borough_distribution_table) <- c("BORO", "Number_of_Incidents")
+knitr::kable(borough_distribution_table, 
+             caption = "Distribution of Incidents Across Boroughs")
+
+
+```
+**Note:** The table above displays the total count of shooting incidents reported in each borough from 2006 to 2022. It's observable that Brooklyn has the highest number of reported incidents, followed by Bronx. On the other hand, Staten Island, despite having a substantial number of incidents, has the lowest count among the boroughs. These counts are instrumental in understanding the geographical distribution of shooting incidents across New York City's boroughs.
+
+# Further Analysis of Data 
+In this part of the report, we are going to dig deeper into the details of the shooting incidents in New York City.
+
+First, we will look at how many of these incidents were actually murders. This will help us understand how frequent these incidents were.
+
+Next, we will try to forecast how many shooting incidents might happen in the next 12 months based on past data. This can help the city prepare better.
+
+After that, we will look at what times shootings happen most often. Knowing the busiest hours can help us see if there are any patterns.
+
+Lastly, we will see which parts of the city have the most shooting incidents. This will show us where the problem areas are.
+
+Each step will give us useful information to better understand the situation and help the city make plans to reduce these incidents in the future.
+ 
+## Calculate the Ratio of Murders to Non-Murders in Shooting Incidents
+
+```{r murder_ratio, message = FALSE}
+
+# Counting the number of TRUE and FALSE in the STATISTICAL_MURDER_FLAG column
+murder_counts <- table(shooting_incidents$STATISTICAL_MURDER_FLAG)
+
+# Calculating the ratio of TRUE (Murders) to FALSE (Non-Murders)
+murder_ratio <- murder_counts["TRUE"] / murder_counts["FALSE"]
+
+# Creating a data frame to hold the counts and the ratio
+murder_summary <- data.frame(
+  Category = c("Murders (TRUE)", "Non-Murders (FALSE)", "Murder to Non-Murder Ratio"),
+  Value = c(as.character(murder_counts["TRUE"]), as.character(murder_counts["FALSE"]), format(murder_ratio, digits = 3, nsmall = 3))
+)
+
+# Displaying the table using kable()
+kable(murder_summary, col.names = c("Category", "Value"), align = c('l', 'r'), caption = "Murder and Non-Murder Incident Counts and Ratio")
+
+
+```
+**Note:** The table above provides an important analysis of the ratio of incidents classified as murders. About 24% of incidents are murders. Further analysis can be done to cluster which types of incidents end up as murders by using Machine Learning. 
+
+
+## Forecasting Incidents for the next 12 months
+
+```{r forecasting, message=FALSE}
+# Aggregating data to monthly frequency
+monthly_incidents <- shooting_incidents %>%
+  group_by(Month = floor_date(OCCUR_DATE, "month")) %>%
+  summarise(Incidents = n(), .groups = 'drop')
+
+# Getting the start year and month
+start_year <- year(min(monthly_incidents$Month))
+start_month <- month(min(monthly_incidents$Month))
+
+# Converting to time series object
+ts_data <- ts(monthly_incidents$Incidents, start = c(start_year, start_month), frequency = 12)
+
+# Fitting ARIMA model
+fit <- auto.arima(ts_data)
+
+# Forecasting next 12 months
+forecast_values <- forecast(fit, h = 12)
+
+# Plotting the forecast 
+forecast_plot <- autoplot(forecast_values) +
+  labs(
+    title = "Forecast of Shooting Incidents",
+    x = "Time (Year and Month)",
+    y = "Number of Incidents",
+    caption = "Forecasts are made for the next 12 months"
+  ) +
+  theme_minimal()
+
+# Display the plot
+print(forecast_plot)
+
+```
+**Figure 1:** *This time series analysis forecasts the incidents for the next 12 months based on past data. It can provide valuable information on resources needed.*
+
+## KDE plot of incidents by hour 
+```{r hourly_incidents, message=FALSE}
+
+# Extracting the hour from the OCCUR_TIME column
+shooting_incidents$Hour <- hour(shooting_incidents$OCCUR_TIME)
+
+# KDE plot of the shooting incidents over different times of the day
+shooting_incidents %>%
+  ggplot(aes(x = Hour)) +
+  geom_density(aes(y = after_stat(density)), fill = "blue", alpha = 0.5) +
+  scale_x_continuous(breaks = seq(0, 23, 1), labels = seq(0, 23, 1)) +  
+  labs(title = "Density of Shooting Incidents Over Time of Day",
+       x = "Time of Day (Hour)",
+       y = "Density")
+```
+**Figure 2:** *This KDE plot visualizes the density of shooting incidents occurring at different hours of the day, revealing patterns and peak times for incidents.*
+
+## Borough incidents Bar Plot 
+```{r plotting_boroughs, message=FALSE}
+# Bar plot showing the number of incidents in each borough
+shooting_incidents %>%
+  group_by(BORO) %>%
+  summarise(Incidents = n()) %>%
+  ggplot(aes(x = BORO, y = Incidents, fill = BORO)) +  
+  geom_bar(stat = "identity") +
+  scale_fill_brewer(palette = "Set2") +  # Colorblind friendly bar colors
+  labs(title = "Number of Shooting Incidents in Each Borough",
+       x = "Borough",
+       y = "Number of Incidents") +
+  theme_minimal() +
+  theme(legend.position = "none")   
+
+```
+**Figure 3:** *This bar plot displays the total number of shooting incidents recorded in each borough, providing a straightforward comparison and geographical perspective on the distribution of incidents.*
+
+# Conclusion
+The analysis of the NYPD Shooting Incident Data from 2006 to 2022 has provided insightful observations into the patterns of shooting incidents across different times of the day and various boroughs.
+
+One significant finding from the density plot is the identification of a critical period during which a substantial portion of shooting incidents occur. Specifically, a higher density of incidents is observed between the hours of 8 PM and 4 AM. This nighttime period appears to be more prone to shooting incidents, suggesting that late-night hours are a riskier period in terms of shooting occurrences.
+
+In addition to time-based patterns, the analysis also provides a geographical perspective by evaluating the distribution of incidents across different boroughs. This geographical insight, paired with the identified time patterns, can be instrumental for law enforcement agencies to optimize their strategies, allocate resources more effectively, and implement preventative measures during the identified high-risk hours. It is imperative to note that while this analysis provides a raw perspective of the frequency of incidents per borough, it has not been normalized for population. The absence of per capita normalization means that a borough with a higher incident count might not necessarily be more dangerous, as a larger population could bias the analysis.
+
+The study of the murder counts and ratios further enriches our understanding, providing a clear picture of the severity and outcomes of the shooting incidents. Knowing the proportion of incidents that resulted in fatalities allows for a more nuanced appreciation of the data’s gravity.
+
+Furthermore, the 12-month forecast offers a valuable predictive perspective, guiding strategic planning and resource allocation in anticipation of future incidents. This foresight can be crucial for proactive measures and responsiveness, enhancing the city's ability to manage and potentially reduce the occurrence of shooting incidents.
+
+In analyzing the NYPD Shooting Incident Data, it is crucial to acknowledge the presence of missing values, as they inherently introduce uncertainty and potential bias in our analysis and subsequent models.
+
+From the data, it is evident that information regarding the perpetrators (e.x., age group, sex, race) has a considerable amount of missing values—about a third of the records lack this essential information. On the contrary, the dataset is more comprehensive concerning victim-related information, with no missing values.
+
+This discrepancy allows for a more reliable and accurate modeling and analysis concerning the victims of shooting incidents. However, it poses a significant challenge when it comes to analyzing or modeling perpetrator-related attributes due to the substantial amount of missing data.
+
+In conducting this analysis, personal biases were diligently observed and checked to ensure that they did not influence the interpretation of the data, particularly regarding perpetrator information. Aware of the potential biases that could arise from personal perspectives and the reporting of incidents, careful consideration was given to avoid drawing biased conclusions. Emphasis was placed on providing an objective, data-driven analysis that faithfully represents the available information without undue influence from preconceived notions or biases.
+
+To maintain the integrity and reliability of any analytical models or insights drawn from this data, we must be cautious and considerate of these missing values. It is crucial not to introduce bias, ensuring that the findings are as accurate and representative as possible. Special attention should be paid to avoid letting the lack of perpetrator information inadvertently skew the analysis, conclusions, or any predictive models that may be developed from this dataset.
+
